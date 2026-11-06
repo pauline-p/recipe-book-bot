@@ -13,8 +13,11 @@ WEBAPP_URL = os.environ.get("WEBAPP_URL", "").rstrip("/")
 PORT = int(os.environ.get("PORT", "8080"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 
-# Кто может пользоваться ботом. Пусто = все (у каждого своя книга).
+# Владельцы бота. Они пользуются без ограничений и зовут друзей командой /invite.
+# Пусто = ботом может пользоваться кто угодно (у каждого своя книга).
 ALLOWED_USER_IDS = _ids(os.environ.get("ALLOWED_USER_IDS", ""))
+# Сколько раз в день приглашённый человек может просить ИИ разобрать или изменить рецепт (0 = без лимита)
+AI_DAILY_LIMIT = int(os.environ.get("AI_DAILY_LIMIT", "20") or 0)
 
 # Какой ИИ разбирает рецепты: gemini или claude
 AI_PROVIDER = os.environ.get("AI_PROVIDER", "gemini").lower()
@@ -33,7 +36,3 @@ DEV_USER_ID = int(os.environ.get("DEV_USER_ID", "0") or 0)
 
 WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp"
 IMAGES_DIR = DATA_DIR / "images"
-
-
-def allowed(user_id: int) -> bool:
-    return not ALLOWED_USER_IDS or user_id in ALLOWED_USER_IDS
