@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 
-from . import photos, ai, config, db, illustrate
+from . import access, photos, ai, config, db, illustrate
 
 
 def user_from_init_data(init_data: str) -> int | None:
@@ -37,12 +37,12 @@ async def auth(request: web.Request, handler):
     uid = user_from_init_data(request.headers.get("X-Init-Data", ""))
     if uid is None and config.DEV_USER_ID:
         uid = config.DEV_USER_ID
-    if uid is None or not config.allowed(uid):
+    if uid is None or not access.allowed(uid):
         return web.json_response({"error": "Открой книгу из Телеграма."}, status=401)
     request["uid"] = uid
     try:
         return await handler(request)
-    except ai.AIError as e:
+    except (ai.AIError, access.LimitError) as e:
         return web.json_response({"error": str(e)}, status=422)
 
 
@@ -129,6 +129,7 @@ async def parse_text(request):
     text = str(body.get("text", "")).strip()
     if not text:
         return web.json_response({"error": "Вставь текст рецепта."}, status=400)
+    access.spend_ai(request["uid"])
     data = await ai.parse_recipe([ai.Part("text", text=text)])
     data["source"] = text
     await ai.fill_nutrition(data.get("ingredients", []))

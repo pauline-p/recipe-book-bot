@@ -13,7 +13,7 @@ FIELDS = ("title", "description", "servings", "ingredients", "steps", "notes", "
 IMAGE_FIELDS = ("image", "image_status")
 
 
-def _conn() -> sqlite3.Connection:
+def conn() -> sqlite3.Connection:
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(config.DATA_DIR / "recipes.db")
     c.row_factory = sqlite3.Row
@@ -21,7 +21,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def init() -> None:
-    with _conn() as c:
+    with conn() as c:
         c.execute("""CREATE TABLE IF NOT EXISTS recipes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -29,6 +29,23 @@ def init() -> None:
             created REAL NOT NULL,
             updated REAL NOT NULL)""")
         c.execute("CREATE INDEX IF NOT EXISTS idx_user ON recipes(user_id)")
+        # Друзья, которых пустили по приглашению (у каждого своя книга)
+        c.execute("""CREATE TABLE IF NOT EXISTS members (
+            user_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL DEFAULT '',
+            invited_by INTEGER,
+            joined REAL NOT NULL)""")
+        c.execute("""CREATE TABLE IF NOT EXISTS invites (
+            code TEXT PRIMARY KEY,
+            created_by INTEGER NOT NULL,
+            created REAL NOT NULL,
+            used_by INTEGER)""")
+        # Сколько раз за день человек просил ИИ разобрать рецепт
+        c.execute("""CREATE TABLE IF NOT EXISTS ai_usage (
+            user_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY (user_id, day))""")
 
 
 def clean(data: dict) -> dict:
@@ -92,7 +109,7 @@ def _row(r: sqlite3.Row) -> dict:
 
 def add(user_id: int, data: dict) -> dict:
     now = time.time()
-    with _conn() as c:
+    with conn() as c:
         cur = c.execute("INSERT INTO recipes(user_id, data, created, updated) VALUES (?,?,?,?)",
                         (user_id, json.dumps(clean(data), ensure_ascii=False), now, now))
         rid = cur.lastrowid
@@ -100,7 +117,7 @@ def add(user_id: int, data: dict) -> dict:
 
 
 def get(user_id: int, rid: int) -> dict | None:
-    with _conn() as c:
+    with conn() as c:
         r = c.execute("SELECT * FROM recipes WHERE id=? AND user_id=?", (rid, user_id)).fetchone()
     return _row(r) if r else None
 
@@ -111,7 +128,7 @@ def update(user_id: int, rid: int, data: dict, keep_image: bool = True) -> dict 
         if old:
             data = {**data, **{k: old.get(k, "") for k in IMAGE_FIELDS}}
             data.setdefault("pos", old.get("pos"))
-    with _conn() as c:
+    with conn() as c:
         cur = c.execute("UPDATE recipes SET data=?, updated=? WHERE id=? AND user_id=?",
                         (json.dumps(clean(data), ensure_ascii=False), time.time(), rid, user_id))
     return get(user_id, rid) if cur.rowcount else None
@@ -119,7 +136,7 @@ def update(user_id: int, rid: int, data: dict, keep_image: bool = True) -> dict 
 
 def delete(user_id: int, rid: int) -> bool:
     old = get(user_id, rid)
-    with _conn() as c:
+    with conn() as c:
         ok = c.execute("DELETE FROM recipes WHERE id=? AND user_id=?", (rid, user_id)).rowcount > 0
     if ok and old and old.get("image"):
         (config.IMAGES_DIR / old["image"]).unlink(missing_ok=True)
@@ -128,7 +145,7 @@ def delete(user_id: int, rid: int) -> bool:
 
 def set_pos(user_id: int, rid: int, pos) -> dict | None:
     """Запоминает место тарелки на главном экране (None — вернуть на место по умолчанию)."""
-    with _conn() as c:
+    with conn() as c:
         r = c.execute("SELECT data FROM recipes WHERE id=? AND user_id=?", (rid, user_id)).fetchone()
         if not r:
             return None
@@ -141,7 +158,7 @@ def set_pos(user_id: int, rid: int, pos) -> dict | None:
 
 def set_image(user_id: int, rid: int, image: str, status: str) -> None:
     """Записывает наклейку, не трогая остальной рецепт."""
-    with _conn() as c:
+    with conn() as c:
         r = c.execute("SELECT data FROM recipes WHERE id=? AND user_id=?", (rid, user_id)).fetchone()
         if not r:
             return
@@ -152,7 +169,7 @@ def set_image(user_id: int, rid: int, image: str, status: str) -> None:
 
 
 def list_all(user_id: int, query: str = "") -> list[dict]:
-    with _conn() as c:
+    with conn() as c:
         rows = c.execute("SELECT * FROM recipes WHERE user_id=? ORDER BY updated DESC",
                          (user_id,)).fetchall()
     items = [_row(r) for r in rows]

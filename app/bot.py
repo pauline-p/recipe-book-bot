@@ -10,7 +10,7 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
                            MenuButtonWebApp, Message, WebAppInfo)
 from aiogram.client.default import DefaultBotProperties
 
-from . import ai, config, db, illustrate, photos
+from . import access, ai, config, db, illustrate, photos
 from .formatting import card, n
 
 log = logging.getLogger(__name__)
@@ -82,9 +82,6 @@ async def keep_typing(bot: Bot, chat_id: int, stop: asyncio.Event) -> None:
 async def handle(bot: Bot, messages: list[Message]) -> None:
     first = messages[0]
     uid = first.from_user.id
-    if not config.allowed(uid):
-        await first.answer("Это личная книга рецептов, доступ закрыт.")
-        return
 
     # Это ответ на карточку рецепта? Тогда считаем это правкой.
     target = None
@@ -120,6 +117,12 @@ async def handle(bot: Bot, messages: list[Message]) -> None:
             r["cooked_weight"] = w or None
             r = db.update(uid, r["id"], r)
             await show(first, r, f"Записала вес готового блюда: {n(w)} г. Пересчитала КБЖУ на 100 г.")
+        return
+
+    try:
+        access.spend_ai(uid)
+    except access.LimitError as e:
+        await first.answer(str(e))
         return
 
     stop = asyncio.Event()
@@ -158,10 +161,44 @@ async def handle(bot: Bot, messages: list[Message]) -> None:
 
 # ---------- Команды ----------
 
+CLOSED = ("Это личная книга рецептов. Чтобы завести свою, попроси у хозяйки бота "
+          "ссылку-приглашение.")
+
+
+@router.message.outer_middleware()
+@router.callback_query.outer_middleware()
+async def gate(handler, event, data):
+    """Пускает только владельцев и приглашённых. /start пропускаем: там принимают приглашение."""
+    user = event.from_user
+    if user is None or access.allowed(user.id):
+        return await handler(event, data)
+    if isinstance(event, Message) and (event.text or "").startswith("/start"):
+        return await handler(event, data)
+    if isinstance(event, CallbackQuery):
+        await event.answer("Доступ закрыт.")
+    elif not event.media_group_id:
+        await event.answer(CLOSED)
+
+
 @router.message(CommandStart())
-async def start(msg: Message) -> None:
-    if not config.allowed(msg.from_user.id):
-        await msg.answer(f"Это личная книга рецептов. Твой id: {msg.from_user.id}")
+async def start(msg: Message, command: CommandObject) -> None:
+    uid = msg.from_user.id
+    arg = command.args or ""
+    if arg.startswith("inv_"):
+        res = access.redeem(arg[4:], uid, msg.from_user.full_name or "")
+        if res == "bad":
+            await msg.answer("Это приглашение уже использовано или устарело. Попроси новую ссылку.")
+            return
+        if res == "ok":
+            await msg.answer("Добро пожаловать! Теперь у тебя своя книга рецептов, её видишь только ты.")
+            for owner in config.ALLOWED_USER_IDS:
+                try:
+                    await msg.bot.send_message(
+                        owner, f"По твоему приглашению пришёл(а) {msg.from_user.full_name}. /people — все гости")
+                except Exception:
+                    pass
+    if not access.allowed(uid):
+        await msg.answer(CLOSED + f"\n\nТвой id: {uid}")
         return
     await msg.answer(
         "Это твоя книга рецептов.\n\n"
@@ -171,7 +208,47 @@ async def start(msg: Message) -> None:
         "например: «убери сахар», «добавь 50 г грецких орехов» или «добавь лайфхак: …».\n\n"
         "Фото готового блюда: нажми «Фото блюда» под рецептом или ответь на рецепт фотографией.\n\n"
         "/list — все рецепты\n/find слово — поиск\n\n"
-        "Всю книгу можно открыть кнопкой «Книга» внизу слева.")
+        + ("/invite — позвать друга (у него будет своя книга)\n/people — кто уже пользуется\n\n"
+           if access.is_owner(uid) else "")
+        + "Всю книгу можно открыть кнопкой «Книга» внизу слева.")
+
+
+# ---------- Друзья: приглашения (только для владельцев) ----------
+
+@router.message(Command("invite"))
+async def invite_cmd(msg: Message) -> None:
+    if not access.is_owner(msg.from_user.id):
+        await msg.answer("Звать друзей может только хозяйка бота.")
+        return
+    me = await msg.bot.me()
+    code = access.new_invite(msg.from_user.id)
+    await msg.answer(
+        "Перешли эту ссылку другу. Она одноразовая и работает 7 дней. "
+        "У друга будет своя отдельная книга, твои рецепты он не увидит.")
+    await msg.answer(f"https://t.me/{me.username}?start=inv_{code}")
+
+
+@router.message(Command("people"))
+async def people_cmd(msg: Message) -> None:
+    if not access.is_owner(msg.from_user.id):
+        return
+    ms = access.members()
+    if not ms:
+        await msg.answer("Пока никого нет. Позови друга командой /invite")
+        return
+    buttons = [[InlineKeyboardButton(text=f"Убрать: {m['name'] or m['user_id']} · рецептов {m['recipes']}",
+                                     callback_data=f"kick:{m['user_id']}")] for m in ms]
+    await msg.answer(f"Гостей: {len(ms)}. Нажми на человека, чтобы закрыть ему доступ "
+                     "(его рецепты сохранятся).", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(F.data.startswith("kick:"))
+async def cb_kick(cq: CallbackQuery) -> None:
+    await cq.answer()
+    if not access.is_owner(cq.from_user.id):
+        return
+    ok = access.remove(int(cq.data.split(":")[1]))
+    await cq.message.edit_text("Доступ закрыт." if ok else "У этого человека уже нет доступа.")
 
 
 @router.message(Command("list"))
