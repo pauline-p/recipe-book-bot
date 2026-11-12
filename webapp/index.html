@@ -155,6 +155,8 @@ textarea.field { min-height: 110px; resize: vertical; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .grid2 label { margin-top: 18px; }
 .hint { font-size: 13px; color: var(--ink-2); margin-top: 6px; }
+.parse-msg { font-size: 14px; color: var(--ink-2); margin-top: 14px; min-height: 20px; text-align: center; }
+.parse-msg.err { color: var(--danger); font-weight: 600; }
 .ing { display: grid; grid-template-columns: 36px 1fr 78px 60px 28px; gap: 6px; align-items: center; margin-bottom: 6px; }
 .ing .emo { width: 36px; height: 36px; border-radius: 12px; background: var(--card); }
 .ing .emo img { width: 22px; height: 22px; }
@@ -289,8 +291,17 @@ function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add(
 function haptic(type) { try { type === "tap" ? tg.HapticFeedback.impactOccurred("light") : tg.HapticFeedback.notificationOccurred(type); } catch (e) {} }
 
 async function api(path, opts = {}) {
-  const res = await fetch("/api" + path, { ...opts,
-    headers: { "Content-Type": "application/json", "X-Init-Data": tg ? tg.initData : "", ...(opts.headers || {}) } });
+  // Не ждём вечно: если сервер молчит, показываем понятную ошибку
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeout || 180000);
+  let res;
+  try {
+    res = await fetch("/api" + path, { ...opts, signal: ctrl.signal,
+      headers: { "Content-Type": "application/json", "X-Init-Data": tg ? tg.initData : "", ...(opts.headers || {}) } });
+  } catch (e) {
+    throw new Error(ctrl.signal.aborted ? "Сервер слишком долго не отвечает. Попробуй ещё раз чуть позже."
+                                        : "Нет связи с сервером. Проверь интернет и попробуй ещё раз.");
+  } finally { clearTimeout(timer); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Что-то пошло не так");
   return data;
@@ -572,15 +583,29 @@ function renderNew() {
     <div class="row2">
       <button class="btn" onclick="go('#/e/new')">Заполнить вручную</button>
       <button class="btn solid" id="parseBtn">Разобрать</button>
-    </div>`;
+    </div>
+    <div class="parse-msg" id="parseMsg" role="status" aria-live="polite"></div>`;
   $("parseBtn").onclick = async e => {
+    const btn = e.currentTarget, msg = $("parseMsg");
     const text = $("paste").value.trim();
     if (!text) return toast("Сначала вставь текст");
-    e.target.disabled = true; e.target.textContent = "Разбираю…";
+    $("paste").blur();  // прячем клавиатуру, чтобы было видно, что происходит
+    btn.disabled = true; btn.textContent = "Разбираю…";
+    msg.className = "parse-msg"; msg.textContent = "Читаю рецепт и считаю КБЖУ, обычно это 10–40 секунд.";
+    const started = Date.now();
+    const tick = setInterval(() => {
+      const s = Math.round((Date.now() - started) / 1000);
+      msg.textContent = s < 60 ? `Читаю рецепт и считаю КБЖУ… ${s} с`
+                               : `Всё ещё думаю (${s} с). ИИ сегодня неторопливый, не закрывай книгу.`;
+    }, 1000);
     try {
-      const r = await api("/parse", { method: "POST", body: JSON.stringify({ text }) });
+      const r = await api("/parse", { method: "POST", body: JSON.stringify({ text }), timeout: 320000 });
       haptic("success"); history.replaceState(null, "", "#/"); await loadBoard(); go("#/r/" + r.id);
-    } catch (err) { toast(err.message); e.target.disabled = false; e.target.textContent = "Разобрать"; }
+    } catch (err) {
+      haptic("error");
+      msg.className = "parse-msg err"; msg.textContent = err.message;
+      btn.disabled = false; btn.textContent = "Попробовать ещё раз";
+    } finally { clearInterval(tick); }
   };
 }
 

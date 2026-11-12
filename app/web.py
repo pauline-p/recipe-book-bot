@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from urllib.parse import parse_qsl
@@ -9,6 +10,8 @@ from urllib.parse import parse_qsl
 from aiohttp import web
 
 from . import access, photos, ai, config, db, illustrate
+
+log = logging.getLogger(__name__)
 
 
 def user_from_init_data(init_data: str) -> int | None:
@@ -44,6 +47,11 @@ async def auth(request: web.Request, handler):
         return await handler(request)
     except (ai.AIError, access.LimitError) as e:
         return web.json_response({"error": str(e)}, status=422)
+    except web.HTTPException:
+        raise
+    except Exception:
+        log.exception("api failed: %s", request.path)
+        return web.json_response({"error": "Что-то сломалось на сервере. Попробуй ещё раз."}, status=500)
 
 
 def rid(request) -> int:
