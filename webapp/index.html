@@ -6,7 +6,8 @@
 <title>Книга рецептов</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Caveat:wght@500;600&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Caveat:wght@500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&icon_names=add,arrow_back,brush,chat,close,content_paste,edit,edit_note,hourglass_top,mic,photo_camera,remove,search&display=block">
 <style>
 /* Лист в точку поверх меш-градиента, блюда — наклейки. Тема всегда светлая.
    Шрифты: Manrope для всего текста, рукописный Caveat только для названий блюд и цифр. */
@@ -53,13 +54,18 @@ h1 { font-weight: 700; font-size: 28px; letter-spacing: -.02em; line-height: 1.1
 .search { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 22px; padding: 0 6px 0 14px;
   margin-top: 16px; box-shadow: 0 2px 10px var(--shadow); }
 .search input { flex: 1; min-width: 0; border: 0; background: none; padding: 12px 0; outline: none; font-size: 16px; }
+/* Поиск — отдельная полоска поверх всего листа: тарелки её не закрывают, и она не перестраивается при наборе */
+#searchRow { position: fixed; z-index: 300; left: 16px; right: 16px; top: calc(env(safe-area-inset-top, 0px) + 10px); margin: 0;
+  max-width: 560px; margin-inline: auto; box-shadow: 0 6px 22px rgba(60,80,110,.22); }
+#searchRow[hidden], #searchRow.away { display: none; }
+body.searching main { padding-top: 66px; }
 .search button { border: 0; background: none; color: var(--ink-2); cursor: pointer; padding: 6px; display: grid; }
 
 .board { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; row-gap: 8px; padding-top: 18px; }
 .sticker { all: unset; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
 .board .sticker:nth-child(even) { margin-top: 70px; }
 .pic { width: 100%; max-width: 220px; aspect-ratio: 1; display: grid; place-items: center; transform: rotate(var(--r, 0deg));
-  filter: drop-shadow(0 8px 14px var(--shadow)) drop-shadow(0 1px 1px var(--shadow)); transition: transform .2s; }
+  transition: transform .2s; }
 .pic img { width: 100%; height: auto; display: block; }
 .sticker .label { font-family: var(--hand); font-weight: 600; font-size: 23px; line-height: 1.05; text-align: center; overflow-wrap: anywhere;
   color: var(--ink); transform: rotate(calc(var(--r, 0deg) * -.6)); max-width: 100%; }
@@ -76,7 +82,7 @@ h1 { font-weight: 700; font-size: 28px; letter-spacing: -.02em; line-height: 1.1
 
 /* Тарелка-заглушка, пока нет иллюстрации */
 .plate { width: 88%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle, #fbfbf9 0 52%, #e9e9e4 53% 56%, #f7f7f4 57% 86%, #ffffff 87%);
-  box-shadow: 0 0 0 1.5px #d6dde8; display: grid; place-items: center; position: relative; overflow: hidden; }
+  box-shadow: 0 0 0 1.5px #d6dde8, 0 6px 12px rgba(60,80,110,.16); display: grid; place-items: center; position: relative; overflow: hidden; }
 .plate img { width: 38%; height: auto; }
 .plate.drawing::after { content: ""; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 30%, rgba(61,123,224,.18) 50%, transparent 70%);
   animation: shimmer 1.4s infinite; }
@@ -181,8 +187,7 @@ main { padding-left: 10px; padding-right: 10px; overflow-x: clip; }
 .sheets { display: block; padding: 4px 0 0; }
 .sheet { position: relative; transform: rotate(var(--a)); margin: 0 4px; }
 .sheet + .sheet { margin-top: -34px; }
-.sheet-paper { position: absolute; inset: 0; pointer-events: none;
-  filter: drop-shadow(0 10px 16px rgba(80,70,30,.16)) drop-shadow(0 1px 1px rgba(80,70,30,.22)); }
+.sheet-paper { position: absolute; inset: 0; pointer-events: none; }
 .sheet-paper::before { --h: 7px; content: ""; position: absolute; inset: 0;
   background:
     linear-gradient(90deg, transparent 36px, rgba(214,120,110,.45) 36px 37.5px, transparent 37.5px),
@@ -222,7 +227,7 @@ main { padding-left: 10px; padding-right: 10px; overflow-x: clip; }
 .hbtn .ms { font-size: 20px; }
 
 /* Фото блюда в тарелке */
-.plate.photo { background: #fff; box-shadow: 0 0 0 1.5px #e3e3dc, inset 0 0 0 5px #f4f4ef; padding: 7%; }
+.plate.photo { background: #fff; box-shadow: 0 0 0 1.5px #e3e3dc, inset 0 0 0 5px #f4f4ef, 0 6px 12px rgba(60,80,110,.16); padding: 7%; }
 .plate.photo img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
 .addphoto { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 6px auto 14px; border: 0; cursor: pointer;
   background: var(--ink); color: #fff; border-radius: 22px; padding: 10px 18px; font-weight: 600; font-size: 15px; }
@@ -236,10 +241,10 @@ main { padding-left: 10px; padding-right: 10px; overflow-x: clip; }
 .sticker img { -webkit-user-drag: none; }
 .sticker.lifted { z-index: 200; transition: none; will-change: transform; }
 /* Поднятая тарелка: круглая тень вместо filter — filter на iPhone при движении оставлял прямоугольный шлейф */
-.sticker.lifted .pic { transform: rotate(var(--r)) scale(1.1); filter: none; }
+.sticker.lifted .pic { transform: rotate(var(--r)) scale(1.1); }
 .sticker.lifted .plate { box-shadow: 0 0 0 1.5px #d6dde8, 0 22px 30px rgba(40,40,30,.26), 0 3px 4px rgba(40,40,30,.18); }
 .sticker.lifted .plate.photo { box-shadow: 0 0 0 1.5px #e3e3dc, inset 0 0 0 5px #f4f4ef, 0 22px 30px rgba(40,40,30,.26), 0 3px 4px rgba(40,40,30,.18); }
-.sheet-paper { transform: translateZ(0); }
+
 .sticker.dropped .pic { animation: drop .32s cubic-bezier(.3,.7,.4,1.3); }
 @keyframes drop { 0% { transform: rotate(var(--r)) scale(1.1); } 60% { transform: rotate(var(--r)) scale(.96); } 100% { transform: rotate(var(--r)) scale(1); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -257,14 +262,14 @@ main { padding-left: 10px; padding-right: 10px; overflow-x: clip; }
     </div>
     <button class="iconbtn" id="searchBtn" aria-label="Поиск"><span class="ms">search</span></button>
   </header>
-  <div class="search" id="searchRow" hidden>
+  </div>
+  <section class="sheets" id="board" aria-label="Рецепты"></section>
+</main>
+  <div class="search" id="searchRow" role="search" hidden>
     <span class="ms" style="color:var(--ink-2)">search</span>
     <input id="q" placeholder="Блюдо или продукт" autocomplete="off">
     <button id="qClear" aria-label="Закрыть поиск"><span class="ms">close</span></button>
   </div>
-  </div>
-  <section class="sheets" id="board" aria-label="Рецепты"></section>
-</main>
 <button class="fab" id="fab"><span class="ms">add</span>Рецепт</button>
 
 <input type="file" id="photoIn" accept="image/*" hidden>
@@ -409,10 +414,11 @@ function drawBoard(items, emptyHTML, countHTML) {
   const br = b.getBoundingClientRect();
   const box = el => { const q = el.getBoundingClientRect(); return { l: q.left - br.left, t: q.top - br.top, r: q.right - br.left, b: q.bottom - br.top }; };
   const busy = [];
+  const topY = headerBottom();                        // выше — заголовок и лупа, туда тарелки не кладём
   items.forEach(r => {
     if (!free || !r.pos) return;
     const el = makeSticker(r);
-    el.style.left = r.pos.x + "%"; el.style.top = r.pos.y + "px";
+    el.style.left = r.pos.x + "%"; el.style.top = Math.max(topY, r.pos.y) + "px";
     free.appendChild(el);
     busy.push(box(el));
   });
@@ -433,10 +439,25 @@ function drawBoard(items, emptyHTML, countHTML) {
       x = Math.max(-5, Math.min(56, x));               // чуть-чуть за край листа можно
       el.style.left = x + "%"; el.style.top = Math.max(-10, y) + "px";
       sheetArea(pg).appendChild(el);
+      if (!busy.length) { next = s + 1; break; }      // нет перетащенных — мерить нечего, так быстрее
       const a = box(el);
       if (!hits(a) || s > i + 40) { busy.push(a); next = s + 1; break; }
     }
   });
+  // Под каждой тарелкой должен быть лист: если перетащенные лежат ниже последнего — подкладываем ещё листы.
+  if (free && free.children.length) {
+    let low = 0;
+    for (const el of free.children) low = Math.max(low, el.offsetTop + el.offsetHeight);
+    for (let guard = 0; guard < 30; guard++) {
+      const last = sheets[sheets.length - 1].parentNode;
+      if (last.offsetTop + last.offsetHeight >= low + 40) break;
+      sheetArea(sheets.length);
+    }
+  }
+}
+function headerBottom() {
+  const t = document.querySelector(".sheet-top");
+  return t ? t.offsetTop + t.offsetHeight - 6 : 0;
 }
 
 // ---------- Перетаскивание: зажать тарелку, подвинуть, отпустить ----------
@@ -483,7 +504,7 @@ function moveTo(cx, cy) {
   let x = (cx - d.dx - br.left) / br.width * 100;
   let y = cy - d.dy - br.top;
   x = Math.max(-10, Math.min(100 - w / br.width * 100 + 10, x));
-  y = Math.max(-20, Math.min(b.scrollHeight - 140, y));
+  y = Math.max(headerBottom(), Math.min(b.scrollHeight - 140, y));
   // Двигаем через transform: браузер не перерисовывает лист под тарелкой, и тень не оставляет следов.
   d.x = x; d.y = y;
   d.el.style.transform = `translate3d(${(x - d.bx) / 100 * br.width}px, ${y - d.by}px, 0)`;
@@ -517,9 +538,10 @@ function pollDrawing() {
     if (m && cur && +m[1] === cur.id) { const r = items.find(x => x.id === cur.id); if (r && r.image !== cur.image) renderCard(r.id); }
   }, 6000);
 }
-$("searchBtn").onclick = () => { $("searchRow").hidden = false; $("q").focus(); };
-$("qClear").onclick = () => { $("q").value = ""; query = ""; $("searchRow").hidden = true; loadBoard(); };
+$("searchBtn").onclick = () => { $("searchRow").hidden = false; document.body.classList.add("searching"); $("q").focus(); scrollTo(0, 0); };
+$("qClear").onclick = () => { $("q").value = ""; query = ""; $("searchRow").hidden = true; document.body.classList.remove("searching"); $("q").blur(); loadBoard(); };
 { let t; $("q").oninput = () => { clearTimeout(t); t = setTimeout(() => { query = $("q").value; loadBoard(); }, 200); }; }
+$("q").onkeydown = e => { if (e.key === "Enter") $("q").blur(); };   // «Ввод» прячет клавиатуру
 $("fab").onclick = () => go("#/new");
 
 // ---------- Карточка рецепта ----------
@@ -739,6 +761,7 @@ async function route() {
   const h = location.hash || "#/";
   let m;
   if (tg) h === "#/" || h === "" ? tg.BackButton.hide() : tg.BackButton.show();
+  $("searchRow").classList.toggle("away", !(h === "#/" || h === ""));   // поиск не висит поверх открытого рецепта
   const card = $("card"), form = $("formPanel");
   try {
     if ((m = h.match(/^#\/r\/(\d+)/))) {
