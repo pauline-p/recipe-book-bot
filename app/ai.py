@@ -2,10 +2,14 @@
 import asyncio
 import base64
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass
 
 from . import config, icons
+
+log = logging.getLogger(__name__)
 
 RECIPE_SCHEMA = """{
   "is_recipe": true,
@@ -90,26 +94,49 @@ def _parse_json(raw: str) -> dict:
 # ---------- Gemini ----------
 
 # Если основная модель перегружена или устарела, пробуем следующую
+# Сколько ждём одну модель и сколько всего ответа ИИ, со всеми запасными моделями
+MODEL_TIMEOUT = 60
+AI_TOTAL_TIMEOUT = 170
+
 GEMINI_FALLBACKS = ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-flash-lite-latest"]
 
 
 def _gemini_client():
     from google import genai
     from google.genai import types
-    # Не ждём одну модель бесконечно: 90 секунд и одна повторная попытка, потом следующая модель
+    # Одна модель — не больше 60 секунд, без повторов: если тормозит, сразу берём запасную,
+    # иначе общий предел AI_TOTAL_TIMEOUT кончается раньше, чем до запасной дойдёт очередь
     return genai.Client(api_key=config.GEMINI_API_KEY, http_options=types.HttpOptions(
-        timeout=90_000, retry_options=types.HttpRetryOptions(attempts=2)))
+        timeout=MODEL_TIMEOUT * 1000, retry_options=types.HttpRetryOptions(attempts=1)))
 
 
 async def _gemini_call(client, **kwargs):
     models = [config.GEMINI_MODEL] + [m for m in GEMINI_FALLBACKS if m != config.GEMINI_MODEL]
     last = None
     for model in models:
+        started = time.monotonic()
         try:
-            return await client.aio.models.generate_content(model=model, **kwargs)
-        except Exception as e:  # 404 — модель убрали, 429/503 — перегрузка
+            try:
+                resp = await asyncio.wait_for(
+                    client.aio.models.generate_content(model=model, **kwargs), MODEL_TIMEOUT + 5)
+            except Exception as e:
+                # Модель не понимает настройку «думай поменьше» — пробуем её же без настройки
+                cfg = kwargs.get("config")
+                if getattr(e, "code", None) == 400 and cfg is not None and cfg.thinking_config:
+                    log.warning("%s: thinking_config не подошёл (%s), пробую без него", model, e)
+                    kwargs = {**kwargs, "config": cfg.model_copy(update={"thinking_config": None})}
+                    resp = await asyncio.wait_for(
+                        client.aio.models.generate_content(model=model, **kwargs), MODEL_TIMEOUT + 5)
+                else:
+                    raise
+            log.info("gemini %s ответил за %.1f с", model, time.monotonic() - started)
+            return resp
+        except Exception as e:  # 404 — модель убрали, 429/503 — перегрузка, таймаут — тормозит
             code = getattr(e, "code", None)
-            if code not in (404, 429, 500, 503) and "Timeout" not in type(e).__name__:
+            log.warning("gemini %s не ответил за %.1f с: %s %s", model, time.monotonic() - started,
+                        type(e).__name__, str(e)[:200])
+            if code not in (404, 429, 500, 503) and not isinstance(e, asyncio.TimeoutError) \
+                    and "Timeout" not in type(e).__name__:
                 raise
             last = e
     raise last
@@ -134,6 +161,8 @@ async def _gemini(system: str, parts: list[Part]) -> dict:
             system_instruction=system,
             response_mime_type="application/json",
             temperature=0.2,
+            # Разбор рецепта не требует долгих раздумий, а с ними ответ на скриншот шёл минутами
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
         ),
     )
     return _parse_json(resp.text or "")
@@ -183,8 +212,6 @@ async def _claude(system: str, parts: list[Part]) -> dict:
     return _parse_json("".join(b.text for b in msg.content if b.type == "text"))
 
 
-# Сколько всего ждём ответа ИИ, со всеми повторами и запасными моделями
-AI_TOTAL_TIMEOUT = 150
 
 
 async def _ask(system: str, parts: list[Part]) -> dict:
