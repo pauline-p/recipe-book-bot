@@ -234,8 +234,12 @@ main { padding-left: 10px; padding-right: 10px; overflow-x: clip; }
 .free-layer .sticker { position: absolute; width: 41%; pointer-events: auto; }
 .sticker, .sticker * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .sticker img { -webkit-user-drag: none; }
-.sticker.lifted { z-index: 200; transition: none; }
-.sticker.lifted .pic { transform: rotate(var(--r)) scale(1.1); filter: drop-shadow(0 22px 26px rgba(40,40,30,.28)) drop-shadow(0 2px 2px rgba(40,40,30,.2)); }
+.sticker.lifted { z-index: 200; transition: none; will-change: transform; }
+/* Поднятая тарелка: круглая тень вместо filter — filter на iPhone при движении оставлял прямоугольный шлейф */
+.sticker.lifted .pic { transform: rotate(var(--r)) scale(1.1); filter: none; }
+.sticker.lifted .plate { box-shadow: 0 0 0 1.5px #d6dde8, 0 22px 30px rgba(40,40,30,.26), 0 3px 4px rgba(40,40,30,.18); }
+.sticker.lifted .plate.photo { box-shadow: 0 0 0 1.5px #e3e3dc, inset 0 0 0 5px #f4f4ef, 0 22px 30px rgba(40,40,30,.26), 0 3px 4px rgba(40,40,30,.18); }
+.sheet-paper { transform: translateZ(0); }
 .sticker.dropped .pic { animation: drop .32s cubic-bezier(.3,.7,.4,1.3); }
 @keyframes drop { 0% { transform: rotate(var(--r)) scale(1.1); } 60% { transform: rotate(var(--r)) scale(.96); } 100% { transform: rotate(var(--r)) scale(1); } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -363,42 +367,76 @@ function drawBoard(items, emptyHTML, countHTML) {
   // Места для 4 тарелок на листе: x в % ширины, y в px. Нечётные листы зеркальные.
   const SLOTS = [[-3, 0], [55, 60], [3, 290], [52, 340]];
   const rnd = (id, k) => { const v = Math.sin(id * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
-  const pages = Math.max(1, Math.ceil(items.length / PER));
   const free = query ? null : Object.assign(document.createElement("div"), { className: "free-layer" });
-  for (let pg = 0; pg < pages; pg++) {
-    const sh = document.createElement("div");
-    sh.className = "sheet";
-    sh.style.setProperty("--a", ANGLES[pg % ANGLES.length] + "deg");
-    sh.style.setProperty("--sheet", SHEETS[pg % SHEETS.length]);
-    sh.style.zIndex = pg + 1;
-    sh.innerHTML = `<div class="sheet-paper"></div>${pg === 0 ? `<div class="sheet-top"></div>` : ""}<div class="sheet-area"></div>`;
-    if (pg === 0) sh.querySelector(".sheet-top").appendChild(topSlotEl);
-    const area = sh.querySelector(".sheet-area");
-    if (!items.length) { area.classList.add("flow"); area.innerHTML = emptyHTML; }
-    items.slice(pg * PER, pg * PER + PER).forEach((r, k) => {
+  // На листе — в порядке добавления: новые рецепты ложатся ниже старых.
+  if (!query) items = items.slice().sort((a, b) => a.id - b.id);
+
+  const sheets = [];
+  const sheetArea = pg => {                            // листы создаём по мере надобности
+    while (sheets.length <= pg) {
+      const n = sheets.length, sh = document.createElement("div");
+      sh.className = "sheet";
+      sh.style.setProperty("--a", ANGLES[n % ANGLES.length] + "deg");
+      sh.style.setProperty("--sheet", SHEETS[n % SHEETS.length]);
+      sh.style.zIndex = n + 1;
+      sh.innerHTML = `<div class="sheet-paper"></div>${n === 0 ? `<div class="sheet-top"></div>` : ""}<div class="sheet-area"></div>`;
+      if (n === 0) sh.querySelector(".sheet-top").appendChild(topSlotEl);
+      if (free && free.parentNode === b) b.insertBefore(sh, free); else b.appendChild(sh);
+      sheets.push(sh.querySelector(".sheet-area"));
+    }
+    return sheets[pg];
+  };
+  const makeSticker = r => {
+    const el = document.createElement("button");
+    el.className = "sticker"; el.style.setProperty("--r", tilt(r.id));
+    el.setAttribute("aria-label", r.title);
+    el.innerHTML = `<div class="pic">${picHTML(r)}</div>
+      <div class="label">${esc(r.title)}</div>
+      <div class="meta">${drawing(r) ? "рисую наклейку…" : `<span class="num">${int(r.nutrition.per100.kcal)}</span> ккал на 100 г`}</div>`;
+    el.onclick = () => {
+      if (el._dragged) { el._dragged = false; return; }   // это было перетаскивание, а не нажатие
+      haptic("tap"); el.classList.remove("hop"); void el.offsetWidth; el.classList.add("hop"); setTimeout(() => go("#/r/" + r.id), 320);
+    };
+    makeDraggable(el, r);
+    return el;
+  };
+
+  sheetArea(0);
+  if (free) b.appendChild(free);
+  if (!items.length) { sheets[0].classList.add("flow"); sheets[0].innerHTML = emptyHTML; return; }
+
+  // Сначала тарелки, которые ты сама перетащила: они лежат там, где их оставили.
+  const br = b.getBoundingClientRect();
+  const box = el => { const q = el.getBoundingClientRect(); return { l: q.left - br.left, t: q.top - br.top, r: q.right - br.left, b: q.bottom - br.top }; };
+  const busy = [];
+  items.forEach(r => {
+    if (!free || !r.pos) return;
+    const el = makeSticker(r);
+    el.style.left = r.pos.x + "%"; el.style.top = r.pos.y + "px";
+    free.appendChild(el);
+    busy.push(box(el));
+  });
+  const GAP = 6;
+  const hits = a => busy.some(o => a.l < o.r - GAP && a.r > o.l + GAP && a.t < o.b - GAP && a.b > o.t + GAP);
+
+  // Остальные — по местам на листах. Место занято перетащенной тарелкой — берём следующее, ниже.
+  let next = 0;
+  items.forEach((r, i) => {
+    if (free && r.pos) return;
+    const el = makeSticker(r);
+    for (let s = Math.max(i, next); ; s++) {
+      const pg = Math.floor(s / PER), k = s % PER;
       let [x, y] = SLOTS[k];
       if (pg % 2) x = 53 - x;                          // зеркалим каждый второй лист
       x += (rnd(r.id, 1) - .5) * 14;                   // ±7% по горизонтали
       y += (rnd(r.id, 2) - .5) * 50;                   // ±25px по вертикали
       x = Math.max(-5, Math.min(56, x));               // чуть-чуть за край листа можно
-      const el = document.createElement("button");
-      el.className = "sticker"; el.style.setProperty("--r", tilt(r.id));
       el.style.left = x + "%"; el.style.top = Math.max(-10, y) + "px";
-      el.setAttribute("aria-label", r.title);
-      el.innerHTML = `<div class="pic">${picHTML(r)}</div>
-        <div class="label">${esc(r.title)}</div>
-        <div class="meta">${drawing(r) ? "рисую наклейку…" : `<span class="num">${int(r.nutrition.per100.kcal)}</span> ккал на 100 г`}</div>`;
-      el.onclick = () => {
-        if (el._dragged) { el._dragged = false; return; }   // это было перетаскивание, а не нажатие
-        haptic("tap"); el.classList.remove("hop"); void el.offsetWidth; el.classList.add("hop"); setTimeout(() => go("#/r/" + r.id), 320);
-      };
-      makeDraggable(el, r);
-      if (free && r.pos) { el.style.left = r.pos.x + "%"; el.style.top = r.pos.y + "px"; free.appendChild(el); }
-      else area.appendChild(el);
-    });
-    b.appendChild(sh);
-  }
-  if (free) b.appendChild(free);
+      sheetArea(pg).appendChild(el);
+      const a = box(el);
+      if (!hits(a) || s > i + 40) { busy.push(a); next = s + 1; break; }
+    }
+  });
 }
 
 // ---------- Перетаскивание: зажать тарелку, подвинуть, отпустить ----------
@@ -431,7 +469,8 @@ function makeDraggable(el, r) {
       el.style.top = (er.top - br.top) + "px";
     }
     const now = el.getBoundingClientRect();
-    dragging = { el, r, dx: start.x - now.left, dy: start.y - now.top, cx: start.x, cy: start.y };
+    const bx = parseFloat(el.style.left), by = parseFloat(el.style.top);
+    dragging = { el, r, dx: start.x - now.left, dy: start.y - now.top, cx: start.x, cy: start.y, bx, by, x: bx, y: by };
     try { el.setPointerCapture(start.id); } catch (err) {}
     el.classList.add("lifted"); el._dragged = true;
     try { tg.HapticFeedback.impactOccurred("medium"); } catch (err) {}
@@ -445,7 +484,9 @@ function moveTo(cx, cy) {
   let y = cy - d.dy - br.top;
   x = Math.max(-10, Math.min(100 - w / br.width * 100 + 10, x));
   y = Math.max(-20, Math.min(b.scrollHeight - 140, y));
-  d.el.style.left = x + "%"; d.el.style.top = y + "px";
+  // Двигаем через transform: браузер не перерисовывает лист под тарелкой, и тень не оставляет следов.
+  d.x = x; d.y = y;
+  d.el.style.transform = `translate3d(${(x - d.bx) / 100 * br.width}px, ${y - d.by}px, 0)`;
 }
 function autoScroll() {                                  // у края экрана лист сам прокручивается
   if (!dragging) return;
@@ -455,7 +496,8 @@ function autoScroll() {                                  // у края экра
   requestAnimationFrame(autoScroll);
 }
 async function drop() {
-  const { el, r } = dragging; dragging = null;
+  const { el, r, x, y } = dragging; dragging = null;
+  el.style.left = x + "%"; el.style.top = y + "px"; el.style.transform = "";
   el.classList.remove("lifted"); el.classList.add("dropped"); setTimeout(() => el.classList.remove("dropped"), 340);
   haptic("tap");
   const pos = { x: parseFloat(el.style.left), y: parseFloat(el.style.top) };
